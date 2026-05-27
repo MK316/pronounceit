@@ -138,8 +138,9 @@ if "diagnosis_done" not in st.session_state:
 if "practice_unlocked" not in st.session_state:
     st.session_state.practice_unlocked = False
 
-if "last_recognized" not in st.session_state:
-    st.session_state.last_recognized = ""
+if "recorder_version" not in st.session_state:
+    st.session_state.recorder_version = 0
+
 
 # -----------------------------
 # Intro
@@ -171,7 +172,7 @@ with col1:
         st.session_state.results = []
         st.session_state.diagnosis_done = False
         st.session_state.practice_unlocked = False
-        st.session_state.last_recognized = ""
+        st.session_state.recorder_version = 0
         st.rerun()
 
 with col2:
@@ -181,8 +182,9 @@ with col2:
         st.session_state.results = []
         st.session_state.diagnosis_done = False
         st.session_state.practice_unlocked = False
-        st.session_state.last_recognized = ""
+        st.session_state.recorder_version += 1
         st.rerun()
+
 
 # -----------------------------
 # Diagnostic test
@@ -209,13 +211,10 @@ if st.session_state.test_started and not st.session_state.diagnosis_done:
             stop_prompt="⏹️ Stop recording",
             just_once=True,
             use_container_width=True,
-            key=f"speech_{current_index}"
+            key=f"speech_{current_index}_{st.session_state.recorder_version}"
         )
 
-        # If speech is recognized, store result and move to the next word.
-        if recognized_text and recognized_text != st.session_state.last_recognized:
-            st.session_state.last_recognized = recognized_text
-
+        if recognized_text:
             diagnosis = diagnose_response(
                 target=target,
                 contrast=contrast,
@@ -237,7 +236,7 @@ if st.session_state.test_started and not st.session_state.diagnosis_done:
             )
 
             st.session_state.current_index += 1
-            st.session_state.last_recognized = ""
+            st.session_state.recorder_version += 1
 
             if st.session_state.current_index >= len(df):
                 st.session_state.diagnosis_done = True
@@ -250,6 +249,7 @@ if st.session_state.test_started and not st.session_state.diagnosis_done:
 
 elif not st.session_state.test_started and not st.session_state.diagnosis_done:
     st.info("Click **Start Test** to begin.")
+
 
 # -----------------------------
 # Diagnosis result
@@ -300,6 +300,7 @@ if st.session_state.diagnosis_done:
             st.session_state.practice_unlocked = True
             st.rerun()
 
+
 # -----------------------------
 # Practice section
 # -----------------------------
@@ -326,6 +327,7 @@ if st.session_state.practice_unlocked:
 
         st.markdown(f"## Practice word: **{selected_word}**")
         st.write("Say the word slowly and clearly. Repeat it several times.")
+
 
 # -----------------------------
 # Teacher note
