@@ -215,6 +215,7 @@ if st.session_state.test_started and not st.session_state.diagnosis_done:
         )
 
         if recognized_text:
+            st.write("Recognized:", recognized_text)
             diagnosis = diagnose_response(
                 target=target,
                 contrast=contrast,
