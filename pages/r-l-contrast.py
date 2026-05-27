@@ -1,9 +1,7 @@
 import streamlit as st
 import pandas as pd
-import speech_recognition as sr
-from streamlit_mic_recorder import mic_recorder
-import tempfile
 import re
+from streamlit_mic_recorder import speech_to_text
 
 # -----------------------------
 # Page setup
@@ -48,25 +46,6 @@ def get_first_word(text):
     if not text:
         return ""
     return text.split()[0]
-
-
-def recognize_speech_from_wav_bytes(audio_bytes):
-    recognizer = sr.Recognizer()
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-        tmp_file.write(audio_bytes)
-        tmp_path = tmp_file.name
-
-    with sr.AudioFile(tmp_path) as source:
-        audio_data = recognizer.record(source)
-
-    try:
-        recognized = recognizer.recognize_google(audio_data, language="en-US")
-        return recognized, None
-    except sr.UnknownValueError:
-        return "", "Not recognized"
-    except sr.RequestError:
-        return "", "Recognition service unavailable"
 
 
 def diagnose_response(target, contrast, target_sound, recognized_text):
@@ -144,6 +123,9 @@ def give_overall_feedback(score, total):
 # -----------------------------
 # Session state
 # -----------------------------
+if "test_started" not in st.session_state:
+    st.session_state.test_started = False
+
 if "current_index" not in st.session_state:
     st.session_state.current_index = 0
 
@@ -156,8 +138,8 @@ if "diagnosis_done" not in st.session_state:
 if "practice_unlocked" not in st.session_state:
     st.session_state.practice_unlocked = False
 
-if "test_started" not in st.session_state:
-    st.session_state.test_started = False
+if "last_recognized" not in st.session_state:
+    st.session_state.last_recognized = ""
 
 # -----------------------------
 # Intro
@@ -189,6 +171,7 @@ with col1:
         st.session_state.results = []
         st.session_state.diagnosis_done = False
         st.session_state.practice_unlocked = False
+        st.session_state.last_recognized = ""
         st.rerun()
 
 with col2:
@@ -198,12 +181,14 @@ with col2:
         st.session_state.results = []
         st.session_state.diagnosis_done = False
         st.session_state.practice_unlocked = False
+        st.session_state.last_recognized = ""
         st.rerun()
 
 # -----------------------------
 # Diagnostic test
 # -----------------------------
 if st.session_state.test_started and not st.session_state.diagnosis_done:
+
     current_index = st.session_state.current_index
 
     if current_index < len(df):
@@ -216,53 +201,48 @@ if st.session_state.test_started and not st.session_state.diagnosis_done:
         st.markdown("---")
         st.markdown(f"### Word {current_index + 1} of {len(df)}")
         st.markdown(f"## Say this word: **{target}**")
-        st.caption("Record your voice. When the word is recognized, the next word will appear.")
+        st.caption("Click Start, say the word, and click Stop. The next word will appear automatically when recognized.")
 
-        audio = mic_recorder(
+        recognized_text = speech_to_text(
+            language="en",
             start_prompt="🎙️ Start recording",
             stop_prompt="⏹️ Stop recording",
             just_once=True,
             use_container_width=True,
-            key=f"recorder_{current_index}"
+            key=f"speech_{current_index}"
         )
 
-        # The recording is NOT displayed.
-        # It is used only for speech recognition.
+        # If speech is recognized, store result and move to the next word.
+        if recognized_text and recognized_text != st.session_state.last_recognized:
+            st.session_state.last_recognized = recognized_text
 
-        if audio:
-            with st.spinner("Analyzing your speech..."):
-                recognized_text, error = recognize_speech_from_wav_bytes(audio["bytes"])
+            diagnosis = diagnose_response(
+                target=target,
+                contrast=contrast,
+                target_sound=target_sound,
+                recognized_text=recognized_text
+            )
 
-            # If recognition fails, stay on the same word.
-            if error or recognized_text.strip() == "":
-                st.warning("The word was not recognized clearly. Please try again.")
-            else:
-                diagnosis = diagnose_response(
-                    target=target,
-                    contrast=contrast,
-                    target_sound=target_sound,
-                    recognized_text=recognized_text
-                )
+            st.session_state.results.append(
+                {
+                    "No": current_index + 1,
+                    "Target": target,
+                    "Target Sound": f"/{target_sound.lower()}/",
+                    "Contrast": contrast,
+                    "Recognized": recognized_text,
+                    "Result": diagnosis["Result"],
+                    "Correct": diagnosis["Correct"],
+                    "Diagnosis": diagnosis["Diagnosis"]
+                }
+            )
 
-                st.session_state.results.append(
-                    {
-                        "No": current_index + 1,
-                        "Target": target,
-                        "Target Sound": f"/{target_sound.lower()}/",
-                        "Contrast": contrast,
-                        "Recognized": recognized_text,
-                        "Result": diagnosis["Result"],
-                        "Correct": diagnosis["Correct"],
-                        "Diagnosis": diagnosis["Diagnosis"]
-                    }
-                )
+            st.session_state.current_index += 1
+            st.session_state.last_recognized = ""
 
-                st.session_state.current_index += 1
+            if st.session_state.current_index >= len(df):
+                st.session_state.diagnosis_done = True
 
-                if st.session_state.current_index >= len(df):
-                    st.session_state.diagnosis_done = True
-
-                st.rerun()
+            st.rerun()
 
     else:
         st.session_state.diagnosis_done = True
