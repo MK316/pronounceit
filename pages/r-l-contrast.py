@@ -42,11 +42,13 @@ def clean_text(text):
     text = re.sub(r"[^a-z\s]", "", text)
     return text
 
+
 def get_first_word(text):
     text = clean_text(text)
     if not text:
         return ""
     return text.split()[0]
+
 
 def recognize_speech_from_wav_bytes(audio_bytes):
     recognizer = sr.Recognizer()
@@ -65,6 +67,7 @@ def recognize_speech_from_wav_bytes(audio_bytes):
         return "", "Not recognized"
     except sr.RequestError:
         return "", "Recognition service unavailable"
+
 
 def diagnose_response(target, contrast, target_sound, recognized_text):
     target_clean = clean_text(target)
@@ -112,6 +115,7 @@ def diagnose_response(target, contrast, target_sound, recognized_text):
         "Diagnosis": f"The target was '{target}', but the app recognized '{recognized_first}'."
     }
 
+
 def give_overall_feedback(score, total):
     percentage = score / total
 
@@ -136,6 +140,7 @@ def give_overall_feedback(score, total):
             "Your /r/ and /l/ production needs more focused practice. Start with slow repetition."
         )
 
+
 # -----------------------------
 # Session state
 # -----------------------------
@@ -151,6 +156,9 @@ if "diagnosis_done" not in st.session_state:
 if "practice_unlocked" not in st.session_state:
     st.session_state.practice_unlocked = False
 
+if "test_started" not in st.session_state:
+    st.session_state.test_started = False
+
 # -----------------------------
 # Intro
 # -----------------------------
@@ -161,28 +169,41 @@ st.markdown(
     You will speak **10 words**.  
     The app will analyze how your speech is recognized.
 
-    During the test, recognition results will not be shown.  
-    You will see the diagnosis after completing all 10 words.
+    During the test, the recording and recognition result will not be displayed.  
+    When your speech is recognized, the next word will appear automatically.
 
-    이 단계에서는 각 문항의 인식 결과를 바로 보여주지 않고,  
-    10개 단어를 모두 말한 뒤 전체 진단 결과를 제시한다.
+    이 단계에서는 녹음 파일과 인식 결과를 바로 보여주지 않는다.  
+    단어가 인식되면 다음 단어로 자동 이동하고, 10개 단어가 끝난 뒤 전체 진단 결과를 제시한다.
     """
 )
 
 # -----------------------------
-# Reset
+# Start / Reset buttons
 # -----------------------------
-if st.button("Reset Test"):
-    st.session_state.current_index = 0
-    st.session_state.results = []
-    st.session_state.diagnosis_done = False
-    st.session_state.practice_unlocked = False
-    st.rerun()
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button("Start Test"):
+        st.session_state.test_started = True
+        st.session_state.current_index = 0
+        st.session_state.results = []
+        st.session_state.diagnosis_done = False
+        st.session_state.practice_unlocked = False
+        st.rerun()
+
+with col2:
+    if st.button("Reset Test"):
+        st.session_state.test_started = False
+        st.session_state.current_index = 0
+        st.session_state.results = []
+        st.session_state.diagnosis_done = False
+        st.session_state.practice_unlocked = False
+        st.rerun()
 
 # -----------------------------
 # Diagnostic test
 # -----------------------------
-if not st.session_state.diagnosis_done:
+if st.session_state.test_started and not st.session_state.diagnosis_done:
     current_index = st.session_state.current_index
 
     if current_index < len(df):
@@ -195,7 +216,7 @@ if not st.session_state.diagnosis_done:
         st.markdown("---")
         st.markdown(f"### Word {current_index + 1} of {len(df)}")
         st.markdown(f"## Say this word: **{target}**")
-        st.caption("Record your voice, then click Analyze and Continue.")
+        st.caption("Record your voice. When the word is recognized, the next word will appear.")
 
         audio = mic_recorder(
             start_prompt="🎙️ Start recording",
@@ -205,17 +226,17 @@ if not st.session_state.diagnosis_done:
             key=f"recorder_{current_index}"
         )
 
-        # Important:
-        # We do NOT display st.audio(audio["bytes"]).
-        # The recording is used only for recognition.
+        # The recording is NOT displayed.
+        # It is used only for speech recognition.
 
         if audio:
-            if st.button("Analyze and Continue", key=f"analyze_{current_index}"):
+            with st.spinner("Analyzing your speech..."):
                 recognized_text, error = recognize_speech_from_wav_bytes(audio["bytes"])
 
-                if error:
-                    recognized_text = ""
-
+            # If recognition fails, stay on the same word.
+            if error or recognized_text.strip() == "":
+                st.warning("The word was not recognized clearly. Please try again.")
+            else:
                 diagnosis = diagnose_response(
                     target=target,
                     contrast=contrast,
@@ -246,6 +267,9 @@ if not st.session_state.diagnosis_done:
     else:
         st.session_state.diagnosis_done = True
         st.rerun()
+
+elif not st.session_state.test_started and not st.session_state.diagnosis_done:
+    st.info("Click **Start Test** to begin.")
 
 # -----------------------------
 # Diagnosis result
@@ -322,3 +346,19 @@ if st.session_state.practice_unlocked:
 
         st.markdown(f"## Practice word: **{selected_word}**")
         st.write("Say the word slowly and clearly. Repeat it several times.")
+
+# -----------------------------
+# Teacher note
+# -----------------------------
+st.markdown("---")
+st.markdown("## Teacher Note")
+
+st.markdown(
+    """
+    This app uses automatic speech recognition as a quick diagnosis tool.  
+    It does not measure pronunciation acoustically.
+
+    자동음성인식 결과는 학습자의 발화가 기계에 어떻게 인식되는지를 보여주는 참고 자료이다.  
+    따라서 이 결과는 최종 평가 점수라기보다 연습 방향을 정하는 진단 자료로 사용하는 것이 적절하다.
+    """
+)
