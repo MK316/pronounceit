@@ -1,4 +1,6 @@
 streamlit
 pandas
 gTTS
+SpeechRecognition
+streamlit-mic-recorder
 matplotlib
