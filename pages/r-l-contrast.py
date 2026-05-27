@@ -1,234 +1,324 @@
 import streamlit as st
 import pandas as pd
-from gtts import gTTS
-from io import BytesIO
-import random
+import speech_recognition as sr
+from streamlit_mic_recorder import mic_recorder
+import tempfile
+import re
 
 # -----------------------------
 # Page setup
 # -----------------------------
 st.set_page_config(
-    page_title="R-L Minimal Pair Practice",
+    page_title="R-L Speaking Diagnosis",
     layout="centered"
 )
 
-st.title("🔊 R-L Minimal Pair Practice")
-st.caption("Practice English words that begin with /r/ and /l/.")
+st.title("🔊 R-L Speaking Diagnosis")
+st.caption("Speak the given word. The app will diagnose your /r/ and /l/ production.")
 
 # -----------------------------
-# Minimal pair data
+# Diagnostic word data
 # -----------------------------
-data = [
-    {"ID": 1, "R_word": "right", "L_word": "light", "R_IPA": "/raɪt/", "L_IPA": "/laɪt/", "Meaning_R": "오른쪽, 맞는", "Meaning_L": "빛, 가벼운"},
-    {"ID": 2, "R_word": "rice", "L_word": "lice", "R_IPA": "/raɪs/", "L_IPA": "/laɪs/", "Meaning_R": "쌀, 밥", "Meaning_L": "이, 머릿니"},
-    {"ID": 3, "R_word": "rock", "L_word": "lock", "R_IPA": "/rɑːk/", "L_IPA": "/lɑːk/", "Meaning_R": "바위", "Meaning_L": "자물쇠, 잠그다"},
-    {"ID": 4, "R_word": "road", "L_word": "load", "R_IPA": "/roʊd/", "L_IPA": "/loʊd/", "Meaning_R": "길, 도로", "Meaning_L": "짐, 싣다"},
-    {"ID": 5, "R_word": "read", "L_word": "lead", "R_IPA": "/riːd/", "L_IPA": "/liːd/", "Meaning_R": "읽다", "Meaning_L": "이끌다"},
-    {"ID": 6, "R_word": "red", "L_word": "led", "R_IPA": "/red/", "L_IPA": "/led/", "Meaning_R": "빨간", "Meaning_L": "이끌었다"},
-    {"ID": 7, "R_word": "race", "L_word": "lace", "R_IPA": "/reɪs/", "L_IPA": "/leɪs/", "Meaning_R": "경주", "Meaning_L": "끈, 레이스"},
-    {"ID": 8, "R_word": "rent", "L_word": "lent", "R_IPA": "/rent/", "L_IPA": "/lent/", "Meaning_R": "빌리다, 임대료", "Meaning_L": "빌려주었다"},
-    {"ID": 9, "R_word": "royal", "L_word": "loyal", "R_IPA": "/ˈrɔɪəl/", "L_IPA": "/ˈlɔɪəl/", "Meaning_R": "왕실의", "Meaning_L": "충성스러운"},
-    {"ID": 10, "R_word": "row", "L_word": "low", "R_IPA": "/roʊ/", "L_IPA": "/loʊ/", "Meaning_R": "줄, 노 젓다", "Meaning_L": "낮은"},
-    {"ID": 11, "R_word": "rip", "L_word": "lip", "R_IPA": "/rɪp/", "L_IPA": "/lɪp/", "Meaning_R": "찢다", "Meaning_L": "입술"},
-    {"ID": 12, "R_word": "rate", "L_word": "late", "R_IPA": "/reɪt/", "L_IPA": "/leɪt/", "Meaning_R": "비율, 평가하다", "Meaning_L": "늦은"},
+diagnostic_words = [
+    {"ID": 1, "Target": "right", "Target_Sound": "R", "Contrast": "light"},
+    {"ID": 2, "Target": "light", "Target_Sound": "L", "Contrast": "right"},
+    {"ID": 3, "Target": "rice", "Target_Sound": "R", "Contrast": "lice"},
+    {"ID": 4, "Target": "lock", "Target_Sound": "L", "Contrast": "rock"},
+    {"ID": 5, "Target": "road", "Target_Sound": "R", "Contrast": "load"},
+    {"ID": 6, "Target": "load", "Target_Sound": "L", "Contrast": "road"},
+    {"ID": 7, "Target": "rip", "Target_Sound": "R", "Contrast": "lip"},
+    {"ID": 8, "Target": "lip", "Target_Sound": "L", "Contrast": "rip"},
+    {"ID": 9, "Target": "royal", "Target_Sound": "R", "Contrast": "loyal"},
+    {"ID": 10, "Target": "loyal", "Target_Sound": "L", "Contrast": "royal"},
 ]
 
-df = pd.DataFrame(data)
+df = pd.DataFrame(diagnostic_words)
 
 # -----------------------------
-# Helper function: make TTS audio
+# Helper functions
 # -----------------------------
-@st.cache_data
-def make_tts_audio(text, lang="en"):
-    tts = gTTS(text=text, lang=lang)
-    audio_fp = BytesIO()
-    tts.write_to_fp(audio_fp)
-    audio_fp.seek(0)
-    return audio_fp.read()
+def clean_text(text):
+    text = str(text).lower().strip()
+    text = re.sub(r"[^a-z\s]", "", text)
+    return text
 
-# -----------------------------
-# Sidebar
-# -----------------------------
-st.sidebar.header("Menu")
-mode = st.sidebar.radio(
-    "Choose mode",
-    ["Practice Mode", "Listening Test Mode", "Data View"]
-)
+def get_first_word(text):
+    text = clean_text(text)
+    if not text:
+        return ""
+    return text.split()[0]
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### Pronunciation Focus")
-st.sidebar.markdown(
-    """
-    - **/r/**: 혀끝이 입천장에 닿지 않음  
-    - **/l/**: 혀끝이 윗잇몸 근처에 닿음  
-    - Korean learners often find this contrast difficult because Korean ㄹ does not map exactly onto English /r/ or /l/.
-    """
-)
+def recognize_speech_from_wav_bytes(audio_bytes):
+    recognizer = sr.Recognizer()
 
-# -----------------------------
-# Initialize session state
-# -----------------------------
-if "score" not in st.session_state:
-    st.session_state.score = 0
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+        tmp_file.write(audio_bytes)
+        tmp_path = tmp_file.name
 
-if "total" not in st.session_state:
-    st.session_state.total = 0
+    with sr.AudioFile(tmp_path) as source:
+        audio_data = recognizer.record(source)
 
-if "current_question" not in st.session_state:
-    st.session_state.current_question = None
+    try:
+        recognized = recognizer.recognize_google(audio_data, language="en-US")
+        return recognized, None
+    except sr.UnknownValueError:
+        return "", "Not recognized"
+    except sr.RequestError:
+        return "", "Recognition service unavailable"
 
-# -----------------------------
-# Practice Mode
-# -----------------------------
-if mode == "Practice Mode":
-    st.subheader("Practice Mode")
-    st.write("Choose a minimal pair and listen to the difference.")
+def diagnose_response(target, contrast, target_sound, recognized_text):
+    target_clean = clean_text(target)
+    contrast_clean = clean_text(contrast)
+    recognized_first = get_first_word(recognized_text)
 
-    pair_options = [
-        f"{row.R_word} / {row.L_word}"
-        for _, row in df.iterrows()
-    ]
+    if recognized_first == "":
+        return {
+            "Result": "Not recognized",
+            "Correct": False,
+            "Diagnosis": "The app could not recognize the word clearly."
+        }
 
-    selected_pair = st.selectbox("Choose a word pair", pair_options)
+    if recognized_first == target_clean:
+        return {
+            "Result": "Correct",
+            "Correct": True,
+            "Diagnosis": f"The word was recognized as '{recognized_first}'."
+        }
 
-    selected_index = pair_options.index(selected_pair)
-    row = df.iloc[selected_index]
+    if recognized_first == contrast_clean:
+        return {
+            "Result": "R-L confusion",
+            "Correct": False,
+            "Diagnosis": f"The target was '{target}', but it was recognized as '{contrast}'."
+        }
 
-    col1, col2 = st.columns(2)
+    if recognized_first.startswith("r") and target_sound == "L":
+        return {
+            "Result": "Possible L-to-R confusion",
+            "Correct": False,
+            "Diagnosis": f"The target begins with /l/, but the recognized word began with /r/: '{recognized_first}'."
+        }
 
-    with col1:
-        st.markdown("### /r/ word")
-        st.markdown(f"## {row['R_word']}")
-        st.write(f"IPA: {row['R_IPA']}")
-        st.write(f"Meaning: {row['Meaning_R']}")
+    if recognized_first.startswith("l") and target_sound == "R":
+        return {
+            "Result": "Possible R-to-L confusion",
+            "Correct": False,
+            "Diagnosis": f"The target begins with /r/, but the recognized word began with /l/: '{recognized_first}'."
+        }
 
-        r_text = f"{row['R_word']}. Listen carefully. {row['R_word']}."
-        r_audio = make_tts_audio(r_text, lang="en")
-        st.audio(r_audio, format="audio/mp3")
+    return {
+        "Result": "Different recognition",
+        "Correct": False,
+        "Diagnosis": f"The target was '{target}', but the app recognized '{recognized_first}'."
+    }
 
-    with col2:
-        st.markdown("### /l/ word")
-        st.markdown(f"## {row['L_word']}")
-        st.write(f"IPA: {row['L_IPA']}")
-        st.write(f"Meaning: {row['Meaning_L']}")
+def give_overall_feedback(score, total):
+    percentage = score / total
 
-        l_text = f"{row['L_word']}. Listen carefully. {row['L_word']}."
-        l_audio = make_tts_audio(l_text, lang="en")
-        st.audio(l_audio, format="audio/mp3")
-
-    st.markdown("---")
-    st.markdown("### Practice sentence")
-
-    word_type = st.radio(
-        "Choose word type for sentence practice",
-        ["/r/ word", "/l/ word"],
-        horizontal=True
-    )
-
-    if word_type == "/r/ word":
-        target_word = row["R_word"]
+    if percentage >= 0.9:
+        return (
+            "Excellent",
+            "Your /r/ and /l/ production was highly recognizable."
+        )
+    elif percentage >= 0.7:
+        return (
+            "Good",
+            "Your /r/ and /l/ production was mostly recognizable, but a few words need focused practice."
+        )
+    elif percentage >= 0.5:
+        return (
+            "Developing",
+            "Your /r/ and /l/ production is still developing. Practice the contrast slowly and clearly."
+        )
     else:
-        target_word = row["L_word"]
-
-    sentence = f"Please say the word {target_word}. The word is {target_word}."
-
-    st.write(sentence)
-    sentence_audio = make_tts_audio(sentence, lang="en")
-    st.audio(sentence_audio, format="audio/mp3")
-
-# -----------------------------
-# Listening Test Mode
-# -----------------------------
-elif mode == "Listening Test Mode":
-    st.subheader("Listening Test Mode")
-    st.write("Listen to the audio and choose the word you heard.")
-
-    col_a, col_b = st.columns(2)
-
-    with col_a:
-        if st.button("New Question"):
-            row = df.sample(1).iloc[0]
-            target_type = random.choice(["R_word", "L_word"])
-
-            if target_type == "R_word":
-                target_word = row["R_word"]
-                other_word = row["L_word"]
-            else:
-                target_word = row["L_word"]
-                other_word = row["R_word"]
-
-            st.session_state.current_question = {
-                "ID": int(row["ID"]),
-                "target_word": target_word,
-                "other_word": other_word,
-                "R_word": row["R_word"],
-                "L_word": row["L_word"],
-                "answer": target_word
-            }
-
-    with col_b:
-        if st.button("Reset Score"):
-            st.session_state.score = 0
-            st.session_state.total = 0
-            st.session_state.current_question = None
-            st.success("Score has been reset.")
-
-    question = st.session_state.current_question
-
-    if question is None:
-        st.info("Click 'New Question' to start.")
-    else:
-        target_word = question["target_word"]
-
-        test_text = f"Listen carefully. {target_word}. {target_word}."
-        test_audio = make_tts_audio(test_text, lang="en")
-
-        st.markdown("### Listen")
-        st.audio(test_audio, format="audio/mp3")
-
-        choices = [question["R_word"], question["L_word"]]
-        random.shuffle(choices)
-
-        user_choice = st.radio(
-            "Which word did you hear?",
-            choices,
-            key=f"choice_{question['ID']}_{question['target_word']}"
+        return (
+            "Needs focused practice",
+            "Your /r/ and /l/ production needs more focused practice. Start with slow repetition."
         )
 
-        if st.button("Check Answer"):
-            st.session_state.total += 1
+# -----------------------------
+# Session state
+# -----------------------------
+if "current_index" not in st.session_state:
+    st.session_state.current_index = 0
 
-            if user_choice == question["answer"]:
-                st.session_state.score += 1
-                st.success(f"Correct! The answer is **{question['answer']}**.")
-            else:
-                st.error(f"Try again. The answer was **{question['answer']}**.")
+if "results" not in st.session_state:
+    st.session_state.results = []
 
-            st.write(
-                f"Current score: **{st.session_state.score} / {st.session_state.total}**"
-            )
+if "diagnosis_done" not in st.session_state:
+    st.session_state.diagnosis_done = False
+
+if "practice_unlocked" not in st.session_state:
+    st.session_state.practice_unlocked = False
+
+# -----------------------------
+# Intro
+# -----------------------------
+st.markdown("## Step 1. Diagnostic Speaking Test")
+
+st.markdown(
+    """
+    You will speak **10 words**.  
+    The app will analyze how your speech is recognized.
+
+    During the test, recognition results will not be shown.  
+    You will see the diagnosis after completing all 10 words.
+
+    이 단계에서는 각 문항의 인식 결과를 바로 보여주지 않고,  
+    10개 단어를 모두 말한 뒤 전체 진단 결과를 제시한다.
+    """
+)
+
+# -----------------------------
+# Reset
+# -----------------------------
+if st.button("Reset Test"):
+    st.session_state.current_index = 0
+    st.session_state.results = []
+    st.session_state.diagnosis_done = False
+    st.session_state.practice_unlocked = False
+    st.rerun()
+
+# -----------------------------
+# Diagnostic test
+# -----------------------------
+if not st.session_state.diagnosis_done:
+    current_index = st.session_state.current_index
+
+    if current_index < len(df):
+        row = df.iloc[current_index]
+
+        target = row["Target"]
+        contrast = row["Contrast"]
+        target_sound = row["Target_Sound"]
 
         st.markdown("---")
-        st.markdown("### Word pair")
-        st.write(f"/r/ word: **{question['R_word']}**")
-        st.write(f"/l/ word: **{question['L_word']}**")
+        st.markdown(f"### Word {current_index + 1} of {len(df)}")
+        st.markdown(f"## Say this word: **{target}**")
+        st.caption("Record your voice, then click Analyze and Continue.")
+
+        audio = mic_recorder(
+            start_prompt="🎙️ Start recording",
+            stop_prompt="⏹️ Stop recording",
+            just_once=True,
+            use_container_width=True,
+            key=f"recorder_{current_index}"
+        )
+
+        # Important:
+        # We do NOT display st.audio(audio["bytes"]).
+        # The recording is used only for recognition.
+
+        if audio:
+            if st.button("Analyze and Continue", key=f"analyze_{current_index}"):
+                recognized_text, error = recognize_speech_from_wav_bytes(audio["bytes"])
+
+                if error:
+                    recognized_text = ""
+
+                diagnosis = diagnose_response(
+                    target=target,
+                    contrast=contrast,
+                    target_sound=target_sound,
+                    recognized_text=recognized_text
+                )
+
+                st.session_state.results.append(
+                    {
+                        "No": current_index + 1,
+                        "Target": target,
+                        "Target Sound": f"/{target_sound.lower()}/",
+                        "Contrast": contrast,
+                        "Recognized": recognized_text,
+                        "Result": diagnosis["Result"],
+                        "Correct": diagnosis["Correct"],
+                        "Diagnosis": diagnosis["Diagnosis"]
+                    }
+                )
+
+                st.session_state.current_index += 1
+
+                if st.session_state.current_index >= len(df):
+                    st.session_state.diagnosis_done = True
+
+                st.rerun()
+
+    else:
+        st.session_state.diagnosis_done = True
+        st.rerun()
 
 # -----------------------------
-# Data View
+# Diagnosis result
 # -----------------------------
-elif mode == "Data View":
-    st.subheader("Data View")
-    st.write("This is the minimal pair dataset used in the app.")
-    st.dataframe(df, use_container_width=True)
+if st.session_state.diagnosis_done:
+    st.markdown("---")
+    st.markdown("## Step 2. Diagnosis Result")
 
-    st.markdown("### Column explanation")
-    st.write(
-        """
-        - `R_word`: word beginning with /r/
-        - `L_word`: word beginning with /l/
-        - `R_IPA`: IPA transcription of the /r/ word
-        - `L_IPA`: IPA transcription of the /l/ word
-        - `Meaning_R`: Korean meaning of the /r/ word
-        - `Meaning_L`: Korean meaning of the /l/ word
-        """
-    )
+    result_df = pd.DataFrame(st.session_state.results)
+
+    if not result_df.empty:
+        score = int(result_df["Correct"].sum())
+        total = len(result_df)
+
+        level, feedback = give_overall_feedback(score, total)
+
+        st.markdown(f"### Score: **{score} / {total}**")
+        st.markdown(f"### Level: **{level}**")
+        st.info(feedback)
+
+        st.markdown("### Detailed Recognition Results")
+        st.dataframe(result_df, use_container_width=True)
+
+        st.markdown("### R-L Confusion Summary")
+
+        confusion_df = result_df[
+            result_df["Result"].isin(
+                [
+                    "R-L confusion",
+                    "Possible L-to-R confusion",
+                    "Possible R-to-L confusion"
+                ]
+            )
+        ]
+
+        if confusion_df.empty:
+            st.success("No clear R-L confusion was detected.")
+        else:
+            st.warning(f"{len(confusion_df)} possible R-L confusion item(s) detected.")
+            st.dataframe(
+                confusion_df[
+                    ["No", "Target", "Target Sound", "Recognized", "Result", "Diagnosis"]
+                ],
+                use_container_width=True
+            )
+
+        if st.button("Move to Practice"):
+            st.session_state.practice_unlocked = True
+            st.rerun()
+
+# -----------------------------
+# Practice section
+# -----------------------------
+if st.session_state.practice_unlocked:
+    st.markdown("---")
+    st.markdown("## Step 3. Practice")
+
+    result_df = pd.DataFrame(st.session_state.results)
+    missed_df = result_df[result_df["Correct"] == False]
+
+    if missed_df.empty:
+        st.success("Great! All words were recognized correctly.")
+    else:
+        st.markdown("### Recommended Practice Words")
+        st.dataframe(
+            missed_df[["Target", "Target Sound", "Recognized", "Diagnosis"]],
+            use_container_width=True
+        )
+
+        selected_word = st.selectbox(
+            "Choose a word to practice",
+            missed_df["Target"].tolist()
+        )
+
+        st.markdown(f"## Practice word: **{selected_word}**")
+        st.write("Say the word slowly and clearly. Repeat it several times.")
